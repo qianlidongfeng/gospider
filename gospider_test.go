@@ -22,3 +22,5 @@ func TestGsData_Clone(t *testing.T) {
 		}
 	}
 }
+
+
