@@ -1,64 +1,90 @@
 package gospider
 
 import (
+	"github.com/qianlidongfeng/httpclient"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 )
 
+type Parser func (sp *Spider,html string,meta Meta,extra Meta) (Action,error)
+
 type Action struct{
-	Parser func (string,Data) (Action,error)
-	Urls []string
-	Data Data
+	Parser Parser
+	Url string
+	Meta Meta
+	Extra Meta
+	Method string
+	PostData string
+}
+
+func NewAction() Action{
+	return Action{}
+}
+
+func (this *Action) Clone() Action{
+	return Action{
+		Parser:this.Parser,
+		Url:this.Url,
+		Meta:this.Meta.Clone(),
+		Extra:this.Extra.Clone(),
+		Method:this.Method,
+		PostData:this.PostData,
+	}
 }
 
 
 type Spider struct{
-	entry Action
 	pool chan Action
+	Clients []httpclient.HttpClient
 	opener chan struct{}
 	finish bool
+	//根据配置文件初始化cd
+	//数据库错误日志保存器
+	//退出时序列化保存
+	//失败时失败actor保存
 }
 
-func NewSpider(maxGoruntime int) Spider{
+func NewSpider() Spider{
 	return Spider{
-		pool:make(chan Action,maxGoruntime),
 	}
 }
 
+func (this *Spider)Init() error{
 
-func (this *Spider) AppendEntry(action Action){
-	this.entry.Parser = action.Parser
-	for _,v := range action.Urls{
-		this.entry.Urls=append(this.entry.Urls,v)
-	}
+
+	return nil
 }
 
 func (this *Spider) Run(){
  	for i:=0;i<len(this.pool);i++{
- 		go func(){
+ 		go func(i int){
  			for !this.finish{
 				<-this.opener
 				var action Action
 				action = <-this.pool
-				for url := range action.Urls {
-					_ = url
-					html := "abc"
-					result, err := action.Parser(html, action.Data.Clone())
-					if err != nil {
-						continue
-					}
-					if len(result.Urls) != 0 {
-						this.pool <- result
-					}else{
-
-					}
+				var html string
+				var err error
+				if strings.ToUpper(action.Method) == "GET"{
+					html,err=this.Clients[i].Get(action.Url)
+				}else if strings.ToUpper(action.Method) == "POST"{
+					html,err=this.Clients[i].Post(action.Url,action.PostData)
 				}
+				result, err := action.Parser(this,html,action.Meta,action.Extra)
+				if err != nil {
+					continue
+				}
+				_=result
 			}
-		}()
+		}(i)
 	}
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt,os.Kill,syscall.SIGTERM)
 	<-c
+}
+
+func (this *Spider) AddEntry(action Action){
+	this.pool<-action
 }
 
