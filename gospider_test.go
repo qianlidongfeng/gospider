@@ -59,4 +59,20 @@ func TestMeta_Clone(t *testing.T) {
 	fmt.Println(i2.(int))
 }
 
+func TestSpider_Init(t *testing.T) {
+	sp:=gospider.NewSpider()
+	err:=sp.Init()
+	if err != nil{
+		t.Error(err)
+	}
+}
+
+func TestAll(t *testing.T) {
+	sp:=gospider.NewSpider()
+	err:=sp.Init()
+	if err != nil{
+		t.Error(err)
+	}
+}
+
 
