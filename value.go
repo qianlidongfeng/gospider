@@ -1,41 +1,42 @@
 package gospider
 
-type gsValue struct{
+type Value struct{
 	value interface{}
 }
 
-func (this *gsValue) Int() int{
+func (this *Value) Int() int{
 	return this.value.(int)
 }
 
-func (this *gsValue) Float() float64{
+func (this *Value) Float() float64{
 	return this.value.(float64)
 }
 
-func (this *gsValue) String() string{
+func (this *Value) String() string{
 	return this.value.(string)
 }
 
-func (this *gsValue) Bool() bool{
+func (this *Value) Bool() bool{
 	return this.value.(bool)
 }
 
-func (this *gsValue) IntArray() []int{
+func (this *Value) IntArray() []int{
 	return this.value.([]int)
 }
 
-func (this *gsValue) FloatArray() []float64{
+func (this *Value) FloatArray() []float64{
 	return this.value.([]float64)
 }
 
-func (this *gsValue) StringArray() []string{
+func (this *Value) StringArray() []string{
 	return this.value.([]string)
 }
 
-func (this *gsValue) GetValue() interface{}{
+func (this *Value) GetValue() interface{}{
 	return this.value
 }
 
-func (this *gsValue) Data() Data{
-	return this.value.(Data)
+func (this *Value) Meta() *Meta{
+	m:=this.value.(Meta)
+	return &m
 }

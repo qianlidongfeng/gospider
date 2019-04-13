@@ -1,6 +1,7 @@
 package gospider
 
 import (
+	"database/sql"
 	"flag"
 	"github.com/headzoo/surf/errors"
 	"github.com/qianlidongfeng/httpclient"
@@ -8,53 +9,45 @@ import (
 	"github.com/qianlidongfeng/loger/netloger"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 )
 
-type Parser func (sp *Spider,html string,meta Meta,extra Meta) (Action,error)
 
-type Action struct{
-	Parser Parser
-	Url string
-	Meta Meta
-	Extra Meta
-	Method string
-	PostData string
-}
-
-func NewAction() Action{
-	return Action{}
-}
-
-func (this *Action) Clone() Action{
-	return Action{
-		Parser:this.Parser,
-		Url:this.Url,
-		Meta:this.Meta.Clone(),
-		Extra:this.Extra.Clone(),
-		Method:this.Method,
-		PostData:this.PostData,
-	}
-}
-
+type completehandle func(meta Meta,db *sql.DB) error
 
 type Spider struct{
-	actions chan Action
+	actionPool chan Action
 	clients []httpclient.HttpClient
-	opener chan struct{}
-	finish bool
+	termsignal bool
 	cfg Config
 	loger loger.Loger
 	output *os.File
+	oncomplete completehandle
+	db *sql.DB
+	actionRecorder Recorder
+	parsers map[string]Parser
+	mu sync.Mutex
+	wg sync.WaitGroup
+	gracefulQuitComplete chan struct{}
 	//根据配置文件初始化
 	//数据库错误日志保存器
+	//接口 结构 指针
+	//爬虫逻辑
+	//Meta是否能反序列化
 	//退出时序列化保存
 	//失败时失败actor保存
 }
 
 func NewSpider() Spider{
 	return Spider{
+		parsers:make(map[string]Parser),
+		mu:sync.Mutex{},
+		wg:sync.WaitGroup{},
+		gracefulQuitComplete:make(chan struct{}),
 	}
 }
 
@@ -65,7 +58,7 @@ func (this *Spider)Init() error{
 		return err
 	}
 	defaultIni:=exe+".ini"
-	configFile:=flag.String("spc", defaultIni, "the path of config file")
+	configFile:=flag.String("c", defaultIni, "the path of config file")
 	flag.Parse()
 	_,err=os.Stat(defaultIni)
 	if err != nil{
@@ -75,6 +68,7 @@ func (this *Spider)Init() error{
 	if err != nil{
 		return err
 	}
+	//初始化日志生成器
 	if this.cfg.LogerType=="netloger" && this.cfg.LogerConfig.Type=="mysql" && this.cfg.Debug==false{
 		this.loger=netloger.NewSqloger()
 		if l,ok:=this.loger.(*netloger.Sqloger);ok{
@@ -95,7 +89,39 @@ func (this *Spider)Init() error{
 			this.loger.(*loger.LocalLoger).SetOutPut(this.output)
 		}
 	}
-	this.actions=make(chan Action,this.cfg.MaxAction)
+	//初始化数据库
+	this.db,err = sql.Open(this.cfg.DBC.Type,this.cfg.DBC.User+":"+
+		this.cfg.DBC.PassWord+"@tcp("+this.cfg.DBC.Address+")/"+this.cfg.DBC.DB)
+	if err != nil{
+		this.loger.Fatal(err)
+		return err
+	}
+	err=this.db.Ping()
+	if err != nil{
+		this.loger.Fatal(err)
+		return err
+	}
+	this.db.SetMaxOpenConns(this.cfg.DBC.MaxOpenConns)
+	this.db.SetMaxIdleConns(this.cfg.DBC.MaxIdleConns)
+	//初始化action记录器
+	if this.cfg.ActionRecord{
+		var label string
+		switch runtime.GOOS {
+		case "windows":
+			label = exe[strings.LastIndex(exe,"\\")+1:]
+		default:
+			label = exe[strings.LastIndex(exe,"/")+1:]
+		}
+		this.actionRecorder=&ActionRecorder{
+			label:label,
+		}
+		err=this.actionRecorder.Init(this.cfg.ARC)
+		if err != nil{
+			return err
+		}
+	}
+	//初始化线程
+	this.actionPool=make(chan Action,this.cfg.MaxAction)
 	for i:=0;i<this.cfg.Thread;i++{
 		client,err:=httpclient.NewHttpClient()
 		if err != nil{
@@ -104,16 +130,32 @@ func (this *Spider)Init() error{
 		}
 		this.clients=append(this.clients,client)
 	}
+	//启动优雅退出处理线程
+	go this.GracefulQuit()
 	return nil
 }
 
 func (this *Spider) Run(){
- 	for i:=0;i<len(this.actions);i++{
+ 	for i:=0;i<len(this.clients);i++{
+ 		this.wg.Add(1)
  		go func(i int){
- 			for !this.finish{
-				<-this.opener
+ 			var ctn bool = true
+ 			for !this.termsignal{
 				var action Action
-				action = <-this.actions
+				select{
+				case action=<-this.actionPool:
+					if !ctn{
+						ctn=true
+						this.wg.Add(1)
+					}
+					break
+				case <-time.After(time.Second):
+					if ctn{
+						ctn=false
+						this.wg.Done()
+					}
+					continue
+				}
 				var html string
 				var err error
 				if strings.ToUpper(action.Method) == "GET"{
@@ -121,28 +163,128 @@ func (this *Spider) Run(){
 				}else if strings.ToUpper(action.Method) == "POST"{
 					html,err=this.clients[i].Post(action.Url,action.PostData)
 				}
-				result, err := action.Parser(this,html,action.Meta,action.Extra)
-				if err != nil {
+				if err != nil{
+					if action.failCount>this.cfg.ARC.MaxFail{
+						if(action.Meta.SubReference()==0){
+							err=this.oncomplete(action.Meta,this.db)
+							if err != nil{
+								this.loger.Warn(err)
+							}
+						}
+						if this.cfg.ActionRecord{
+							action.respy++
+							err=this.actionRecorder.Put(action)
+							if err != nil{
+								this.loger.Warn(err)
+							}
+						}
+					}else{
+						action.failCount++
+						this.AddAction(action)
+					}
 					continue
 				}
-				_=result
+				actions, err := this.parsers[action.Parser](html,action.Meta,action.Branch)
+				if err != nil {
+					//这些要加代码
+					if action.failCount>this.cfg.ARC.MaxFail{
+						if(action.Meta.SubReference()==0){
+							err=this.oncomplete(action.Meta,this.db)
+							if err != nil{
+								this.loger.Warn(err)
+							}
+						}
+						if this.cfg.ActionRecord{
+							action.respy++
+							err=this.actionRecorder.Put(action)
+							if err != nil{
+								this.loger.Warn(err)
+							}
+						}
+					}else{
+						action.failCount++
+						this.AddAction(action)
+					}
+					this.loger.Warn(err)
+					continue
+				}
+				for _,a:=range actions{
+					a.Meta.AddReference()
+					this.AddAction(a)
+				}
+				if(action.Meta.SubReference()==0){
+					this.oncomplete(action.Meta,this.db)
+				}
+			}
+ 			if ctn{
+ 				ctn=false
+ 				this.wg.Done()
 			}
 		}(i)
 	}
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt,os.Kill,syscall.SIGTERM)
-	<-c
-	this.Release()
+	this.wg.Wait()
+ 	if this.termsignal{
+		<-this.gracefulQuitComplete
+		this.Release()
+	}
+	runtime.GC()
 }
 
-func (this *Spider) AddEntry(action Action){
-	this.actions<-action
+func (this *Spider) fix(){
+	this.actionPool=make(chan Action,this.cfg.MaxAction)
+	actions,err:=this.actionRecorder.GetActions()
+	if err != nil{
+		this.loger.Fatal()
+	}
+	for _,action:=range actions{
+		this.actionPool<-action
+	}
+	this.Run()
+}
+
+func (this *Spider) Start(){
+
+}
+
+func (this *Spider) AddAction(action Action){
+	this.actionPool<-action
 }
 
 func (this *Spider) Release(){
-	if l,ok:=this.loger.(*netloger.Sqloger);ok{
-		l.Release()
-	}else if _,ok:=this.loger.(*loger.LocalLoger);ok{
+	if _,ok:=this.loger.(*loger.LocalLoger);ok{
 		this.output.Close()
 	}
+	this.loger.Close()
+	this.actionRecorder.Close()
+	this.db.Close()
+}
+
+func (this *Spider) SetCompleteHander(f completehandle){
+	this.oncomplete=f
+}
+
+func (this *Spider) RegisterParser(name string,parser Parser){
+	this.mu.Lock()
+	this.parsers[name]=parser
+	this.mu.Unlock()
+}
+
+func (this *Spider) GracefulQuit(){
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt,os.Kill,syscall.SIGTERM)
+	<-c
+	this.termsignal=true
+	this.wg.Wait()
+	close(this.actionPool)
+	for action:=range(this.actionPool){
+		err:=this.actionRecorder.Put(action)
+		if err != nil{
+			this.loger.Warn(err)
+		}
+	}
+	this.gracefulQuitComplete<-struct{}{}
+}
+
+func (this *Spider) SetActionLabel(label string){
+	this.actionRecorder.SetActionLabel(label)
 }

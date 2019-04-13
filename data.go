@@ -2,122 +2,137 @@ package gospider
 
 import (
 	"reflect"
+	"sync"
 )
 
-type Meta map[string] interface{}
 
+type Meta struct{
+	M map[string] interface{}
+	AddRefer func()	int
+	SubRefer func() int
+	GetRefer func() int
+	referMu *sync.Mutex
+	mu *sync.Mutex
+}
 
 func NewMeta() Meta{
-	return 	make(map[string]interface{})
-
+	rmu:=sync.Mutex{}
+	add,sub,get:=func()(a func() int,s func() int,g func() int){
+		reference:=1
+		a=func() int{
+			rmu.Lock()
+			defer rmu.Unlock()
+			reference++
+			return reference
+		}
+		s=func() int{
+			rmu.Lock()
+			defer rmu.Unlock()
+			reference--
+			return reference
+		}
+		g=func() int{
+			rmu.Lock()
+			defer rmu.Unlock()
+			return reference
+		}
+		return
+	}()
+	return Meta{
+		M:make(map[string]interface{}),
+		mu:&sync.Mutex{},
+		referMu:&rmu,
+		AddRefer:add,
+		SubRefer:sub,
+		GetRefer:get,
+	}
 }
 
-func(this Meta) Clone() Meta{
-	d:=NewMeta()
-	for k,v := range this{
+func(this *Meta) Set(key string,value interface{}){
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.M[key]=value
+}
+
+func(this *Meta) Get(key string) (v Value,ok bool){
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	vl,ok:= this.M[key]
+	return Value{value:vl},ok
+}
+
+func(this *Meta) Clone() Meta{
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	m:=NewMeta()
+
+	for k,v := range this.M{
 		rtype := reflect.TypeOf(v)
 		switch rtype.Kind() {
 		case reflect.Slice:
 			if s,ok:=v.([]int);ok {
 				s = make([]int, len(v.([]int)))
 				copy(s, v.([]int))
-				d[k]=s
+				m.Set(k, s)
 			}else if s,ok:=v.([]float64);ok{
 				s = make([]float64, len(v.([]float64)))
 				copy(s, v.([]float64))
-				d[k]=s
+				m.Set(k, s)
 			}else if s,ok:=v.([]string);ok{
 				s = make([]string, len(v.([]string)))
 				copy(s, v.([]string))
-				d[k]=s
+				m.Set(k, s)
 			}else if s,ok:=v.([]interface{});ok{
 				s = make([]interface{}, len(v.([]interface{})))
 				copy(s, v.([]interface{}))
-				d[k]=s
+				m.Set(k, s)
 			}else{
-				d[k]=v
+				m.Set(k,v)
 			}
-		case reflect.Map:
+		case reflect.Struct:
 			if s,ok:=v.(Meta);ok{
-				s = v.(Meta).Clone()
-				d[k]=s
+				s = v.(Meta)
+				m.Set(k,s.Clone())
 			}else{
-				d[k]=v
+				m.Set(k,v)
 			}
 		default:
-			d[k]=v
+			m.Set(k,v)
 		}
 	}
-	return d
+	return m
 }
 
-type GsData struct{
-	m map[string] interface{}
+func (this *Meta) Clear(){
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	this.M=make(map[string]interface{})
 }
 
-func NewGsData() *GsData{
-	return &GsData{
-		m:make(map[string]interface{}),
-	}
+func (this *Meta) Length() int{
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return len(this.M)
 }
 
-func(this *GsData) Set(key string,value interface{}){
-	this.m[key]=value
+func (this *Meta) Delete(key string){
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	delete(this.M,key)
 }
 
-func(this *GsData) Get(key string) (v Value,ok bool){
-	vl,ok:= this.m[key]
-	return &gsValue{value:vl},ok
+func (this *Meta) AddReference() int{
+	return this.AddRefer()
 }
 
-func(this *GsData) Clone() Data{
-	d:=NewGsData()
-	for k,v := range this.m{
-		rtype := reflect.TypeOf(v)
-		switch rtype.Kind() {
-		case reflect.Slice:
-			if s,ok:=v.([]int);ok {
-				s = make([]int, len(v.([]int)))
-				copy(s, v.([]int))
-				d.Set(k, s)
-			}else if s,ok:=v.([]float64);ok{
-				s = make([]float64, len(v.([]float64)))
-				copy(s, v.([]float64))
-				d.Set(k, s)
-			}else if s,ok:=v.([]string);ok{
-				s = make([]string, len(v.([]string)))
-				copy(s, v.([]string))
-				d.Set(k, s)
-			}else if s,ok:=v.([]interface{});ok{
-				s = make([]interface{}, len(v.([]interface{})))
-				copy(s, v.([]interface{}))
-				d.Set(k, s)
-			}else{
-				d.Set(k,v)
-			}
-		case reflect.Ptr:
-			if s,ok:=v.(Data);ok{
-				s = v.(Data).Clone()
-				d.Set(k,s)
-			}else{
-				d.Set(k,v)
-			}
-		default:
-			d.Set(k,v)
-		}
-	}
-	return d
+func (this *Meta) SubReference() int{
+	return this.SubRefer()
 }
 
-func (this *GsData) Clear(){
-	this=NewGsData()
+func (this *Meta) GetReference() int{
+	return this.GetRefer()
 }
 
-func (this *GsData) Length() int{
-	return len(this.m)
+func (this *Meta) Map() map[string]interface{}{
+	return this.Clone().M
 }
-
-func (this *GsData) Delete(key string){
-	delete(this.m,key)
-}
-
