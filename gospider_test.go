@@ -13,10 +13,7 @@ func TestMeta_Clone(t *testing.T) {
 	a:=gospider.NewMeta()
 	a.Set("key",123)
 	d.Set("xixi",a)
-	d.AddReference()
 	c:=d.Clone()
-	fmt.Println(d.GetReference())
-	fmt.Println(c.GetReference())
 	c.Set("bool",false)
 	sl,_:=c.Get("slice")
 	sl.IntArray()[0]=5

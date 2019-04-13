@@ -17,7 +17,7 @@ import (
 )
 
 
-type completehandle func(meta Meta,db *sql.DB) error
+type savehandle func(meta Meta,db *sql.DB) error
 
 type Spider struct{
 	actionPool chan Action
@@ -26,7 +26,7 @@ type Spider struct{
 	cfg Config
 	loger loger.Loger
 	output *os.File
-	oncomplete completehandle
+	onsave savehandle
 	db *sql.DB
 	actionRecorder Recorder
 	parsers map[string]Parser
@@ -164,19 +164,11 @@ func (this *Spider) Run(){
 					html,err=this.clients[i].Post(action.Url,action.PostData)
 				}
 				if err != nil{
-					if action.failCount>this.cfg.ARC.MaxFail{
-						if(action.Meta.SubReference()==0){
-							err=this.oncomplete(action.Meta,this.db)
-							if err != nil{
-								this.loger.Warn(err)
-							}
-						}
-						if this.cfg.ActionRecord{
-							action.respy++
-							err=this.actionRecorder.Put(action)
-							if err != nil{
-								this.loger.Warn(err)
-							}
+					if action.failCount>this.cfg.ARC.MaxFail && this.cfg.ActionRecord{
+						action.respy++
+						err=this.actionRecorder.Put(action)
+						if err != nil{
+							this.loger.Warn(err)
 						}
 					}else{
 						action.failCount++
@@ -184,36 +176,19 @@ func (this *Spider) Run(){
 					}
 					continue
 				}
-				actions, err := this.parsers[action.Parser](html,action.Meta,action.Branch)
+				err = this.parsers[action.Parser](this,html,action.Meta)
 				if err != nil {
-					//这些要加代码
-					if action.failCount>this.cfg.ARC.MaxFail{
-						if(action.Meta.SubReference()==0){
-							err=this.oncomplete(action.Meta,this.db)
-							if err != nil{
-								this.loger.Warn(err)
-							}
-						}
-						if this.cfg.ActionRecord{
-							action.respy++
-							err=this.actionRecorder.Put(action)
-							if err != nil{
-								this.loger.Warn(err)
-							}
+					if action.failCount>this.cfg.ARC.MaxFail && this.cfg.ActionRecord{
+						action.respy++
+						err=this.actionRecorder.Put(action)
+						if err != nil{
+							this.loger.Warn(err)
 						}
 					}else{
 						action.failCount++
 						this.AddAction(action)
 					}
-					this.loger.Warn(err)
 					continue
-				}
-				for _,a:=range actions{
-					a.Meta.AddReference()
-					this.AddAction(a)
-				}
-				if(action.Meta.SubReference()==0){
-					this.oncomplete(action.Meta,this.db)
 				}
 			}
  			if ctn{
@@ -247,7 +222,7 @@ func (this *Spider) Start(){
 }
 
 func (this *Spider) AddAction(action Action){
-	this.actionPool<-action
+	this.actionPool<-action.Clone()
 }
 
 func (this *Spider) Release(){
@@ -259,8 +234,8 @@ func (this *Spider) Release(){
 	this.db.Close()
 }
 
-func (this *Spider) SetCompleteHander(f completehandle){
-	this.oncomplete=f
+func (this *Spider) SetSaveHander(f savehandle){
+	this.onsave=f
 }
 
 func (this *Spider) RegisterParser(name string,parser Parser){
@@ -287,4 +262,8 @@ func (this *Spider) GracefulQuit(){
 
 func (this *Spider) SetActionLabel(label string){
 	this.actionRecorder.SetActionLabel(label)
+}
+
+func (this *Spider) Save(meta Meta){
+	this.onsave(meta,this.db)
 }

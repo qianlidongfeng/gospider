@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 )
-var TABLE_FIELDS = [8]string{"time","label","url","content","respy","parser","method","postdata"}
+var TABLE_FIELDS = [8]string{"time","label","url","meta","respy","parser","method","postdata"}
 type ActionRecorder struct{
 	db *sql.DB
 	stmtPut *sql.Stmt
@@ -52,7 +52,7 @@ func (this *ActionRecorder) Init(cfg ActionRecordConfig) error{
 	if err != nil{
 		return err
 	}
-	this.stmtGet,err=this.db.Prepare(fmt.Sprintf(`SELECT id,url,content,parser,method,postdata FROM %s WHERE label="%s" AND respy<=%d`,cfg.Table,this.label,cfg.MaxRespy))
+	this.stmtGet,err=this.db.Prepare(fmt.Sprintf(`SELECT id,url,meta,parser,method,postdata,respy FROM %s WHERE label="%s" AND respy<=%d`,cfg.Table,this.label,cfg.MaxRespy))
 	if err != nil{
 		return err
 	}
@@ -92,7 +92,7 @@ func (this *ActionRecorder) checkFeilds(db *sql.DB,tb string) error{
 			if err != nil{
 				return err
 			}
-		case "content":
+		case "meta":
 			_,err:=db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s BLOB",tb,v))
 			if err != nil{
 				return err
@@ -127,7 +127,7 @@ func (this *ActionRecorder) Put(action Action) error{
 	//time.Now().Format("2006-01-02 15:04:05")
 	var binary bytes.Buffer
 	encoder := gob.NewEncoder(&binary)
-	err:=encoder.Encode(action.Branch)
+	err:=encoder.Encode(action.Meta)
 	b:=binary.Bytes()
 	_,err=this.stmtPut.Exec(time.Now().Format("2006-01-02 15:04:05"),this.label,action.Url,b,
 		action.respy,action.Parser,action.Method,action.PostData)
@@ -148,11 +148,11 @@ func (this *ActionRecorder) GetActions() (actions []Action,err error){
 	}
 	defer rows.Close()
 	for rows.Next(){
-		var id int
+		var id,respy int
 		var url,parser,method,postdata string
 		var content []byte
 
-		err=rows.Scan(&id, &url, &content,&parser,&method,&postdata)
+		err=rows.Scan(&id, &url, &content,&parser,&method,&postdata,&respy)
 		if err!=nil{
 			return
 		}
@@ -166,6 +166,7 @@ func (this *ActionRecorder) GetActions() (actions []Action,err error){
 		action.Meta=meta
 		action.Method=method
 		action.PostData=postdata
+		action.respy=respy
 		actions=append(actions,action)
 	}
 	return

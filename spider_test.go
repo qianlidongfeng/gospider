@@ -39,7 +39,8 @@ func TestAction_Clone(t *testing.T) {
 		t.Error(err)
 	}
 	action:=NewAction("homepage","www.baidu.com")
-	action.Branch=meta
+	action.Meta=meta
+	action.respy=11
 	sp.actionRecorder.Put(action)
 	var ms2 []Meta
 	var meta2 Meta

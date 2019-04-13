@@ -8,43 +8,13 @@ import (
 
 type Meta struct{
 	M map[string] interface{}
-	AddRefer func()	int
-	SubRefer func() int
-	GetRefer func() int
-	referMu *sync.Mutex
 	mu *sync.Mutex
 }
 
 func NewMeta() Meta{
-	rmu:=sync.Mutex{}
-	add,sub,get:=func()(a func() int,s func() int,g func() int){
-		reference:=1
-		a=func() int{
-			rmu.Lock()
-			defer rmu.Unlock()
-			reference++
-			return reference
-		}
-		s=func() int{
-			rmu.Lock()
-			defer rmu.Unlock()
-			reference--
-			return reference
-		}
-		g=func() int{
-			rmu.Lock()
-			defer rmu.Unlock()
-			return reference
-		}
-		return
-	}()
 	return Meta{
 		M:make(map[string]interface{}),
 		mu:&sync.Mutex{},
-		referMu:&rmu,
-		AddRefer:add,
-		SubRefer:sub,
-		GetRefer:get,
 	}
 }
 
@@ -119,18 +89,6 @@ func (this *Meta) Delete(key string){
 	this.mu.Lock()
 	defer this.mu.Unlock()
 	delete(this.M,key)
-}
-
-func (this *Meta) AddReference() int{
-	return this.AddRefer()
-}
-
-func (this *Meta) SubReference() int{
-	return this.SubRefer()
-}
-
-func (this *Meta) GetReference() int{
-	return this.GetRefer()
 }
 
 func (this *Meta) Map() map[string]interface{}{
