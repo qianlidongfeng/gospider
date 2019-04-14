@@ -14,6 +14,7 @@ type ActionRecorder struct{
 	db *sql.DB
 	stmtPut *sql.Stmt
 	stmtGet *sql.Stmt
+	stmtDel *sql.Stmt
 	label string
 }
 
@@ -53,6 +54,10 @@ func (this *ActionRecorder) Init(cfg ActionRecordConfig) error{
 		return err
 	}
 	this.stmtGet,err=this.db.Prepare(fmt.Sprintf(`SELECT id,url,meta,parser,method,postdata,respy FROM %s WHERE label="%s" AND respy<=%d`,cfg.Table,this.label,cfg.MaxRespy))
+	if err != nil{
+		return err
+	}
+	this.stmtDel,err=this.db.Prepare(fmt.Sprintf(`DELETE FROM %s WHERE id=?`,cfg.Table))
 	if err != nil{
 		return err
 	}
@@ -147,6 +152,7 @@ func (this *ActionRecorder) GetActions() (actions []Action,err error){
 		return
 	}
 	defer rows.Close()
+	var ids[]int
 	for rows.Next(){
 		var id,respy int
 		var url,parser,method,postdata string
@@ -168,6 +174,10 @@ func (this *ActionRecorder) GetActions() (actions []Action,err error){
 		action.PostData=postdata
 		action.respy=respy
 		actions=append(actions,action)
+		ids=append(ids,id)
+	}
+	for _,id:=range ids{
+		this.stmtDel.Exec(id)
 	}
 	return
 }
@@ -175,5 +185,6 @@ func (this *ActionRecorder) GetActions() (actions []Action,err error){
 func (this *ActionRecorder) Close(){
 	this.stmtPut.Close()
 	this.stmtGet.Close()
+	this.stmtDel.Close()
 	this.db.Close()
 }

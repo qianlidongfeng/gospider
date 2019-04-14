@@ -4,6 +4,7 @@ import (
 	"github.com/headzoo/surf/errors"
 	"github.com/qianlidongfeng/loger/netloger"
 	"gopkg.in/ini.v1"
+	"time"
 )
 
 type DBConfig struct{
@@ -21,6 +22,10 @@ type Config struct{
 	MaxAction int
 	LogerType string
 	LogerConfig netloger.SqlConfig
+	EnableCookie bool
+	EnableProxy bool
+	TimeOut time.Duration
+	ResetHttpclient bool
 	DBC DBConfig
 	ARC ActionRecordConfig
 	Debug bool
@@ -56,6 +61,23 @@ func (this *Config) Init(configFile string) error{
 	this.Debug,err = s.Key("debug").Bool()
 	if err != nil{
 		return errors.New("bad ini,spider->debug")
+	}
+	this.EnableCookie,err = s.Key("enable_cookie").Bool()
+	if err != nil{
+		return errors.New("bad ini,spider->enable_cookie")
+	}
+	this.EnableProxy,err = s.Key("enable_proxy").Bool()
+	if err != nil{
+		return errors.New("bad ini,spider->enable_proxy")
+	}
+	timeout,err := s.Key("timeout").Int()
+	if err != nil{
+		return errors.New("bad ini,spider->timeout")
+	}
+	this.TimeOut=time.Duration(timeout)
+	this.ResetHttpclient,err = s.Key("reset_httpclient").Bool()
+	if err != nil{
+		return errors.New("bad ini,spider->reset_httpclient")
 	}
 	this.ActionRecord,err = s.Key("action_record").Bool()
 	if err != nil{
@@ -151,23 +173,23 @@ func (this *Config) Init(configFile string) error{
 	this.DBC.PassWord = s.Key("passwd").String()
 	this.DBC.DB = s.Key("database").String()
 	if this.DBC.DB == ""{
-		return errors.New("bad ini,db->database is empty")
+		return errors.New("bad ini,db->database")
 	}
 	this.DBC.Type = s.Key("type").String()
 	if this.DBC.Type == ""{
-		return errors.New("bad ini,db->type is empty")
+		return errors.New("bad ini,db->type")
 	}
 	this.DBC.Address = s.Key("address").String()
 	if this.DBC.Address == ""{
-		return errors.New("bad ini,db->address is empty")
+		return errors.New("bad ini,db->address")
 	}
 	this.DBC.MaxOpenConns,err= s.Key("max_open_conns").Int()
 	if err !=nil{
-		return errors.New("bad ini,db->max_open_conns error")
+		return errors.New("bad ini,db->max_open_conns")
 	}
 	this.DBC.MaxIdleConns,err= s.Key("max_idle_conns").Int()
 	if err !=nil{
-		return errors.New("bad ini,db->max_idle_conns error")
+		return errors.New("bad ini,db->max_idle_conns")
 	}
 	return nil
 }

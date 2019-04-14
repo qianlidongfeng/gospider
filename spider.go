@@ -123,7 +123,7 @@ func (this *Spider)Init() error{
 	//初始化线程
 	this.actionPool=make(chan Action,this.cfg.MaxAction)
 	for i:=0;i<this.cfg.Thread;i++{
-		client,err:=httpclient.NewHttpClient()
+		client,err:=this.NewClient()
 		if err != nil{
 			this.loger.Fatal(err)
 			return err
@@ -156,6 +156,9 @@ func (this *Spider) Run(){
 					}
 					continue
 				}
+				if this.cfg.Debug{
+					this.loger.(*loger.LocalLoger).Debug(action.Method+" "+action.Url)
+				}
 				var html string
 				var err error
 				if strings.ToUpper(action.Method) == "GET"{
@@ -164,6 +167,7 @@ func (this *Spider) Run(){
 					html,err=this.clients[i].Post(action.Url,action.PostData)
 				}
 				if err != nil{
+					action.failCount++
 					if action.failCount>this.cfg.ARC.MaxFail && this.cfg.ActionRecord{
 						action.respy++
 						err=this.actionRecorder.Put(action)
@@ -171,13 +175,22 @@ func (this *Spider) Run(){
 							this.loger.Warn(err)
 						}
 					}else{
-						action.failCount++
 						this.AddAction(action)
+					}
+					if this.cfg.ResetHttpclient{
+						this.clients[i],err=this.NewClient()
+						if err != nil{
+							this.loger.Fatal(err)
+						}
+					}
+					if this.cfg.Debug{
+						this.loger.(*loger.LocalLoger).Debug(err)
 					}
 					continue
 				}
 				err = this.parsers[action.Parser](this,html,action.Meta)
 				if err != nil {
+					action.failCount++
 					if action.failCount>this.cfg.ARC.MaxFail && this.cfg.ActionRecord{
 						action.respy++
 						err=this.actionRecorder.Put(action)
@@ -185,10 +198,15 @@ func (this *Spider) Run(){
 							this.loger.Warn(err)
 						}
 					}else{
-						action.failCount++
 						this.AddAction(action)
 					}
+					if this.cfg.Debug{
+						this.loger.(*loger.LocalLoger).Debug(err)
+					}
 					continue
+				}
+				if this.cfg.Debug{
+					this.loger.(*loger.LocalLoger).Debug(action.Url+" done")
 				}
 			}
  			if ctn{
@@ -205,7 +223,7 @@ func (this *Spider) Run(){
 	runtime.GC()
 }
 
-func (this *Spider) fix(){
+func (this *Spider) Fix(){
 	this.actionPool=make(chan Action,this.cfg.MaxAction)
 	actions,err:=this.actionRecorder.GetActions()
 	if err != nil{
@@ -218,11 +236,17 @@ func (this *Spider) fix(){
 }
 
 func (this *Spider) Start(){
-
+	mode:=flag.String("m", "fix", "run mode,\nrun:begin\nfix:fix\n")
+	flag.Parse()
+	if *mode=="fix"{
+		this.Fix()
+	}else if *mode == "run"{
+		this.Run()
+	}
 }
 
 func (this *Spider) AddAction(action Action){
-	this.actionPool<-action.Clone()
+	this.actionPool<-action
 }
 
 func (this *Spider) Release(){
@@ -266,4 +290,18 @@ func (this *Spider) SetActionLabel(label string){
 
 func (this *Spider) Save(meta Meta){
 	this.onsave(meta,this.db)
+}
+
+func (this *Spider) NewClient() (client httpclient.HttpClient,err error){
+	client,err=httpclient.NewHttpClient()
+	if err != nil{
+		return
+	}
+	if this.cfg.EnableCookie{
+		client.EnableCookie()
+	}
+	if this.cfg.TimeOut != 0{
+		client.SetTimeOut(time.Second*this.cfg.TimeOut)
+	}
+	return
 }

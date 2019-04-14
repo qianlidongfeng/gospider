@@ -41,7 +41,7 @@ func (this *Action) SetUrl(url string){
 }
 
 func (this *Action) SetMeta(meta Meta){
-	this.Meta=meta
+	this.Meta=meta.Clone()
 }
 
 func (this *Action) SetMethod(method string){
