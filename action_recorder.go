@@ -72,6 +72,7 @@ func (this *ActionRecorder) checkFeilds(db *sql.DB,tb string) error{
 	if err != nil{
 		return err
 	}
+	defer rows.Close()
 	var field string
 	for rows.Next(){
 		err:=rows.Scan(&field)

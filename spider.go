@@ -3,10 +3,12 @@ package gospider
 import (
 	"database/sql"
 	"flag"
+	"fmt"
 	"github.com/headzoo/surf/errors"
 	"github.com/qianlidongfeng/httpclient"
 	"github.com/qianlidongfeng/loger"
 	"github.com/qianlidongfeng/loger/netloger"
+	"log"
 	"os"
 	"os/signal"
 	"runtime"
@@ -33,6 +35,7 @@ type Spider struct{
 	mu sync.Mutex
 	wg sync.WaitGroup
 	gracefulQuitComplete chan struct{}
+	mode string
 	//根据配置文件初始化
 	//数据库错误日志保存器
 	//接口 结构 指针
@@ -59,7 +62,9 @@ func (this *Spider)Init() error{
 	}
 	defaultIni:=exe+".ini"
 	configFile:=flag.String("c", defaultIni, "the path of config file")
+	mode:=flag.String("m", "run", "the spider mode\nrun:begin\nfix:fix\n")
 	flag.Parse()
+	this.mode=*mode
 	_,err=os.Stat(defaultIni)
 	if err != nil{
 		return errors.New("spider config file not found")
@@ -68,26 +73,24 @@ func (this *Spider)Init() error{
 	if err != nil{
 		return err
 	}
-	//初始化日志生成器
-	if this.cfg.LogerType=="netloger" && this.cfg.LogerConfig.Type=="mysql" && this.cfg.Debug==false{
-		this.loger=netloger.NewSqloger()
-		if l,ok:=this.loger.(*netloger.Sqloger);ok{
-			err=l.Init(this.cfg.LogerConfig)
-			if err != nil{
-				return err
-			}//if l,ok:=this.loger.(*netloger.Oracleloger);ok
-		}else{
-			return errors.New("assert netloger.Sqloger failed")
+	//重定向输出流
+	if this.cfg.Debug == false{
+		this.output, err = os.OpenFile(exe+".log", os.O_WRONLY|os.O_CREATE|os.O_SYNC|os.O_APPEND, 0644)
+		if err != nil{
+			return err
 		}
+		log.SetOutput(this.output)
+	}
+	//初始化日志生成器
+	if this.cfg.LogerType=="netloger" && this.cfg.Debug==false{
+		lg:=netloger.NewSqloger()
+		err=lg.Init(this.cfg.LogerConfig)
+		if err != nil{
+			return err
+		}//
+		this.loger=lg
 	}else{
 		this.loger=loger.NewLocalLoger()
-		if this.cfg.Debug == false{
-			this.output, err = os.OpenFile(exe+".log", os.O_WRONLY|os.O_CREATE|os.O_SYNC|os.O_APPEND, 0644)
-			if err != nil{
-				return err
-			}
-			this.loger.(*loger.LocalLoger).SetOutPut(this.output)
-		}
 	}
 	//初始化数据库
 	this.db,err = sql.Open(this.cfg.DBC.Type,this.cfg.DBC.User+":"+
@@ -156,6 +159,9 @@ func (this *Spider) Run(){
 					}
 					continue
 				}
+				if this.cfg.Delay != 0{
+					time.Sleep(this.cfg.Delay)
+				}
 				if this.cfg.Debug{
 					this.loger.(*loger.LocalLoger).Debug(action.Method+" "+action.Url)
 				}
@@ -177,19 +183,20 @@ func (this *Spider) Run(){
 					}else{
 						this.AddAction(action)
 					}
+					if this.cfg.Debug{
+						this.loger.(*loger.LocalLoger).Debug(err)
+					}
 					if this.cfg.ResetHttpclient{
 						this.clients[i],err=this.NewClient()
 						if err != nil{
 							this.loger.Fatal(err)
 						}
 					}
-					if this.cfg.Debug{
-						this.loger.(*loger.LocalLoger).Debug(err)
-					}
 					continue
 				}
 				err = this.parsers[action.Parser](this,html,action.Meta)
 				if err != nil {
+					this.loger.Warn(err)
 					action.failCount++
 					if action.failCount>this.cfg.ARC.MaxFail && this.cfg.ActionRecord{
 						action.respy++
@@ -199,9 +206,6 @@ func (this *Spider) Run(){
 						}
 					}else{
 						this.AddAction(action)
-					}
-					if this.cfg.Debug{
-						this.loger.(*loger.LocalLoger).Debug(err)
 					}
 					continue
 				}
@@ -236,11 +240,11 @@ func (this *Spider) Fix(){
 }
 
 func (this *Spider) Start(){
-	mode:=flag.String("m", "fix", "run mode,\nrun:begin\nfix:fix\n")
-	flag.Parse()
-	if *mode=="fix"{
+	if this.mode=="fix"{
+		fmt.Println("fix")
 		this.Fix()
-	}else if *mode == "run"{
+	}else if this.mode == "run"{
+		fmt.Println("run")
 		this.Run()
 	}
 }
@@ -301,7 +305,7 @@ func (this *Spider) NewClient() (client httpclient.HttpClient,err error){
 		client.EnableCookie()
 	}
 	if this.cfg.TimeOut != 0{
-		client.SetTimeOut(time.Second*this.cfg.TimeOut)
+		client.SetTimeOut(this.cfg.TimeOut)
 	}
 	return
 }

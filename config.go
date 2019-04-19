@@ -30,6 +30,7 @@ type Config struct{
 	ARC ActionRecordConfig
 	Debug bool
 	ActionRecord bool
+	Delay time.Duration
 }
 
 func NewConfig() Config{
@@ -74,7 +75,12 @@ func (this *Config) Init(configFile string) error{
 	if err != nil{
 		return errors.New("bad ini,spider->timeout")
 	}
-	this.TimeOut=time.Duration(timeout)
+	this.TimeOut=time.Duration(timeout)*time.Millisecond
+	delay,err := s.Key("delay").Int()
+	if err != nil{
+		return errors.New("bad ini,spider->delay")
+	}
+	this.Delay=time.Duration(delay)*time.Millisecond
 	this.ResetHttpclient,err = s.Key("reset_httpclient").Bool()
 	if err != nil{
 		return errors.New("bad ini,spider->reset_httpclient")
@@ -143,12 +149,8 @@ func (this *Config) Init(configFile string) error{
 		if this.LogerConfig.Address == ""{
 			return errors.New("bad ini,logerdb->address")
 		}
-		this.LogerConfig.Type = s.Key("type").String()
-		if this.LogerConfig.Type == ""{
-			return errors.New("bad ini,logerdb->type")
-		}
-		this.LogerConfig.DB = s.Key("database").String()
-		if this.LogerConfig.DB == ""{
+		this.LogerConfig.Database = s.Key("database").String()
+		if this.LogerConfig.Database == ""{
 			return errors.New("bad ini,logerdb->database")
 		}
 		this.LogerConfig.Table = s.Key("table").String()
