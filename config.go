@@ -32,6 +32,7 @@ type Config struct{
 	ProxyServer string
 	ProxyType string
 	TimeOut time.Duration
+	ReqClose bool
 	ResetHttpclient bool
 	DBC DBConfig
 	ARC ActionRecordConfig
@@ -101,6 +102,10 @@ func (this *Config) Init(configFile string) error{
 		return errors.New("bad ini,spider->timeout")
 	}
 	this.TimeOut=time.Duration(timeout)*time.Millisecond
+	this.ReqClose,err= s.Key("reqclose").Bool()
+	if err != nil{
+		return errors.New("bad ini,spider->reqclose")
+	}
 	delay,err := s.Key("delay").Int()
 	if err != nil{
 		return errors.New("bad ini,spider->delay")

@@ -340,6 +340,7 @@ func (this *Spider) NewClient() httpclient.HttpClient{
 			client.SetSock5Proxy(this.proxyPool.Get())
 		}
 	}
+	client.SetReqClose(this.cfg.ReqClose)
 	return client
 }
 
