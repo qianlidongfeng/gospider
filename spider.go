@@ -2,13 +2,13 @@ package gospider
 
 import (
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
-	"github.com/headzoo/surf/errors"
 	"github.com/qianlidongfeng/httpclient"
 	"github.com/qianlidongfeng/loger"
 	"github.com/qianlidongfeng/loger/netloger"
-	"log"
+	syslog "log"
 	"os"
 	"os/signal"
 	"runtime"
@@ -25,8 +25,8 @@ type Spider struct{
 	actionPool chan Action
 	clients []httpclient.HttpClient
 	termsignal bool
+	finish bool
 	cfg Config
-	loger loger.Loger
 	output *os.File
 	onsave savehandle
 	db *sql.DB
@@ -34,15 +34,10 @@ type Spider struct{
 	parsers map[string]Parser
 	mu sync.Mutex
 	wg sync.WaitGroup
+	threadWg sync.WaitGroup
 	gracefulQuitComplete chan struct{}
 	mode string
-	//根据配置文件初始化
-	//数据库错误日志保存器
-	//接口 结构 指针
-	//爬虫逻辑
-	//Meta是否能反序列化
-	//退出时序列化保存
-	//失败时失败actor保存
+	proxyPool ProxyPool
 }
 
 func NewSpider() Spider{
@@ -50,6 +45,7 @@ func NewSpider() Spider{
 		parsers:make(map[string]Parser),
 		mu:sync.Mutex{},
 		wg:sync.WaitGroup{},
+		threadWg:sync.WaitGroup{},
 		gracefulQuitComplete:make(chan struct{}),
 	}
 }
@@ -79,7 +75,7 @@ func (this *Spider)Init() error{
 		if err != nil{
 			return err
 		}
-		log.SetOutput(this.output)
+		syslog.SetOutput(this.output)
 	}
 	//初始化日志生成器
 	if this.cfg.LogerType=="netloger" && this.cfg.Debug==false{
@@ -88,24 +84,26 @@ func (this *Spider)Init() error{
 		if err != nil{
 			return err
 		}//
-		this.loger=lg
+		log=lg
 	}else{
-		this.loger=loger.NewLocalLoger()
+		log=loger.NewLocalLoger()
 	}
 	//初始化数据库
-	this.db,err = sql.Open(this.cfg.DBC.Type,this.cfg.DBC.User+":"+
-		this.cfg.DBC.PassWord+"@tcp("+this.cfg.DBC.Address+")/"+this.cfg.DBC.DB)
-	if err != nil{
-		this.loger.Fatal(err)
-		return err
+	if this.cfg.EnableDB{
+		this.db,err = sql.Open(this.cfg.DBC.Type,this.cfg.DBC.User+":"+
+			this.cfg.DBC.PassWord+"@tcp("+this.cfg.DBC.Address+")/"+this.cfg.DBC.DB)
+		if err != nil{
+			log.Fatal(err)
+			return err
+		}
+		err=this.db.Ping()
+		if err != nil{
+			log.Fatal(err)
+			return err
+		}
+		this.db.SetMaxOpenConns(this.cfg.DBC.MaxOpenConns)
+		this.db.SetMaxIdleConns(this.cfg.DBC.MaxIdleConns)
 	}
-	err=this.db.Ping()
-	if err != nil{
-		this.loger.Fatal(err)
-		return err
-	}
-	this.db.SetMaxOpenConns(this.cfg.DBC.MaxOpenConns)
-	this.db.SetMaxIdleConns(this.cfg.DBC.MaxIdleConns)
 	//初始化action记录器
 	if this.cfg.ActionRecord{
 		var label string
@@ -123,14 +121,12 @@ func (this *Spider)Init() error{
 			return err
 		}
 	}
+	//初始化代理
+	this.proxyPool=NewProxyPool(this.cfg.ProxyPoolSize,this.cfg.ProxyServer)
 	//初始化线程
 	this.actionPool=make(chan Action,this.cfg.MaxAction)
 	for i:=0;i<this.cfg.Thread;i++{
-		client,err:=this.NewClient()
-		if err != nil{
-			this.loger.Fatal(err)
-			return err
-		}
+		client:=this.NewClient()
 		this.clients=append(this.clients,client)
 	}
 	//启动优雅退出处理线程
@@ -140,89 +136,20 @@ func (this *Spider)Init() error{
 
 func (this *Spider) Run(){
  	for i:=0;i<len(this.clients);i++{
- 		this.wg.Add(1)
+ 		this.threadWg.Add(1)
  		go func(i int){
- 			var ctn bool = true
- 			for !this.termsignal{
-				var action Action
-				select{
-				case action=<-this.actionPool:
-					if !ctn{
-						ctn=true
-						this.wg.Add(1)
-					}
-					break
-				case <-time.After(time.Second):
-					if ctn{
-						ctn=false
-						this.wg.Done()
-					}
-					continue
-				}
-				if this.cfg.Delay != 0{
-					time.Sleep(this.cfg.Delay)
-				}
-				if this.cfg.Debug{
-					this.loger.(*loger.LocalLoger).Debug(action.Method+" "+action.Url)
-				}
-				var html string
-				var err error
-				if strings.ToUpper(action.Method) == "GET"{
-					html,err=this.clients[i].Get(action.Url)
-				}else if strings.ToUpper(action.Method) == "POST"{
-					html,err=this.clients[i].Post(action.Url,action.PostData)
-				}
-				if err != nil{
-					action.failCount++
-					if action.failCount>this.cfg.ARC.MaxFail && this.cfg.ActionRecord{
-						action.respy++
-						err=this.actionRecorder.Put(action)
-						if err != nil{
-							this.loger.Warn(err)
-						}
-					}else{
-						this.AddAction(action)
-					}
-					if this.cfg.Debug{
-						this.loger.(*loger.LocalLoger).Debug(err)
-					}
-					if this.cfg.ResetHttpclient{
-						this.clients[i],err=this.NewClient()
-						if err != nil{
-							this.loger.Fatal(err)
-						}
-					}
-					continue
-				}
-				err = this.parsers[action.Parser](this,html,action.Meta)
-				if err != nil {
-					this.loger.Warn(err)
-					action.failCount++
-					if action.failCount>this.cfg.ARC.MaxFail && this.cfg.ActionRecord{
-						action.respy++
-						err=this.actionRecorder.Put(action)
-						if err != nil{
-							this.loger.Warn(err)
-						}
-					}else{
-						this.AddAction(action)
-					}
-					continue
-				}
-				if this.cfg.Debug{
-					this.loger.(*loger.LocalLoger).Debug(action.Url+" done")
-				}
+ 			for !this.termsignal && !this.finish{
+				this.Do(i)
 			}
- 			if ctn{
- 				ctn=false
- 				this.wg.Done()
-			}
+ 			this.threadWg.Done()
 		}(i)
 	}
 	this.wg.Wait()
+ 	this.finish=true
+ 	this.threadWg.Wait()
  	if this.termsignal{
 		<-this.gracefulQuitComplete
-		this.Release()
+		os.Exit(1)
 	}
 	runtime.GC()
 }
@@ -231,7 +158,7 @@ func (this *Spider) Fix(){
 	this.actionPool=make(chan Action,this.cfg.MaxAction)
 	actions,err:=this.actionRecorder.GetActions()
 	if err != nil{
-		this.loger.Fatal()
+		log.Fatal(err)
 	}
 	for _,action:=range actions{
 		this.actionPool<-action
@@ -249,17 +176,108 @@ func (this *Spider) Start(){
 	}
 }
 
+func (this *Spider) Do(i int){
+	var action Action
+	action=<-this.actionPool
+	defer this.wg.Done()
+	if this.cfg.Delay != 0{
+		time.Sleep(this.cfg.Delay)
+	}
+	if this.cfg.Debug{
+		log.(*loger.LocalLoger).Debug(action.Method+" "+action.Url)
+	}
+	var resp httpclient.Resp
+	var err error
+	if this.cfg.EnableCookie && action.Cookies != nil{
+		this.clients[i].SetCookies(action.Url,action.Cookies)
+	}
+	for k,v :=range action.TempHeader{
+		this.clients[i].SetTempHeaderField(k,v)
+	}
+	if strings.ToUpper(action.Method) == "GET"{
+		resp,err=this.clients[i].Get(action.Url)
+	}else if strings.ToUpper(action.Method) == "POST"{
+		resp,err=this.clients[i].Post(action.Url,action.PostData)
+	}
+	if err != nil{
+		action.failCount++
+		if action.failCount>this.cfg.ARC.MaxFail && this.cfg.ActionRecord{
+			action.Respy++
+			cookies,err:=this.clients[i].GetCooikes(action.Url)
+			action.SetCookies(cookies)
+			err=this.actionRecorder.Put(action)
+			if err != nil{
+				log.Warn(err)
+			}
+		}else{
+			this.AddAction(action)
+		}
+		if this.cfg.EnableProxy&&this.cfg.ChangeProxy{
+			if this.cfg.ProxyType=="http"{
+				this.clients[i].SetHttpProxy("http://"+this.proxyPool.Get())
+			}else if this.cfg.ProxyType=="sock5"{
+				this.clients[i].SetSock5Proxy(this.proxyPool.Get())
+			}
+		}
+		log.Warn(err)
+		return
+	}
+	log.Msg("success",action.Url)
+	err = this.parsers[action.Parser](this,resp,action.Meta)
+	if err != nil {
+		log.Warn(err)
+		action.failCount++
+		if action.failCount>this.cfg.ARC.MaxFail && this.cfg.ActionRecord{
+			action.Respy++
+			cookies,err:=this.clients[i].GetCooikes(action.Url)
+			action.SetCookies(cookies)
+			err=this.actionRecorder.Put(action)
+			if err != nil{
+				log.Warn(err)
+			}
+		}else{
+			this.AddAction(action)
+		}
+		if this.cfg.EnableProxy&&this.cfg.ChangeProxy{
+			if this.cfg.ProxyType=="http"{
+				this.clients[i].SetHttpProxy("http://"+this.proxyPool.Get())
+			}else if this.cfg.ProxyType=="sock5"{
+				this.clients[i].SetSock5Proxy(this.proxyPool.Get())
+			}
+		}
+		return
+	}
+	if this.cfg.EnableProxy&&this.cfg.ChangeProxy{
+		if this.cfg.ProxyType=="http"{
+			this.clients[i].SetHttpProxy("http://"+this.proxyPool.Get())
+		}else if this.cfg.ProxyType=="sock5"{
+			this.clients[i].SetSock5Proxy(this.proxyPool.Get())
+		}
+	}
+	if this.cfg.ChangeAgent{
+		this.clients[i].SetHeaderField("User-Agent", httpclient.UserAgents.One())
+	}
+	if this.cfg.Debug{
+		log.(*loger.LocalLoger).Debug(action.Url+" done")
+	}
+}
+
 func (this *Spider) AddAction(action Action){
+	this.wg.Add(1)
 	this.actionPool<-action
 }
 
 func (this *Spider) Release(){
-	if _,ok:=this.loger.(*loger.LocalLoger);ok{
+	if _,ok:=log.(*loger.LocalLoger);ok{
 		this.output.Close()
 	}
-	this.loger.Close()
-	this.actionRecorder.Close()
-	this.db.Close()
+	log.Close()
+	if this.cfg.ActionRecord{
+		this.actionRecorder.Close()
+	}
+	if this.cfg.EnableDB{
+		this.db.Close()
+	}
 }
 
 func (this *Spider) SetSaveHander(f savehandle){
@@ -277,12 +295,20 @@ func (this *Spider) GracefulQuit(){
 	signal.Notify(c, os.Interrupt,os.Kill,syscall.SIGTERM)
 	<-c
 	this.termsignal=true
-	this.wg.Wait()
-	close(this.actionPool)
-	for action:=range(this.actionPool){
-		err:=this.actionRecorder.Put(action)
-		if err != nil{
-			this.loger.Warn(err)
+	this.threadWg.Wait()
+	record:
+	for{
+		select{
+		case action:=<-this.actionPool:
+			if this.cfg.ActionRecord{
+				err:=this.actionRecorder.Put(action)
+				if err != nil{
+					log.Warn(err)
+				}
+			}
+			this.wg.Done()
+		default:
+			break record
 		}
 	}
 	this.gracefulQuitComplete<-struct{}{}
@@ -293,19 +319,30 @@ func (this *Spider) SetActionLabel(label string){
 }
 
 func (this *Spider) Save(meta Meta){
-	this.onsave(meta,this.db)
+	err := this.onsave(meta,this.db)
+	if err != nil{
+		log.Warn(err)
+	}
 }
 
-func (this *Spider) NewClient() (client httpclient.HttpClient,err error){
-	client,err=httpclient.NewHttpClient()
-	if err != nil{
-		return
+func (this *Spider) NewClient() httpclient.HttpClient{
+	client:=httpclient.NewHttpClient()
+	if this.cfg.TimeOut != 0{
+		client.SetTimeOut(this.cfg.TimeOut)
 	}
 	if this.cfg.EnableCookie{
 		client.EnableCookie()
 	}
-	if this.cfg.TimeOut != 0{
-		client.SetTimeOut(this.cfg.TimeOut)
+	if this.cfg.EnableProxy{
+		if this.cfg.ProxyType=="http"{
+			client.SetHttpProxy("http://"+this.proxyPool.Get())
+		}else if this.cfg.ProxyType=="sock5"{
+			client.SetSock5Proxy(this.proxyPool.Get())
+		}
 	}
-	return
+	return client
+}
+
+func (this *Spider) Log(label string,v ...interface{}){
+	log.Msg(label,v...)
 }

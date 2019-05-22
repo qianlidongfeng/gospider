@@ -1,8 +1,8 @@
 package gospider
 
 import (
-	"github.com/headzoo/surf/errors"
-	"github.com/qianlidongfeng/loger/netloger"
+	"errors"
+	"github.com/qianlidongfeng/toolbox"
 	"gopkg.in/ini.v1"
 	"time"
 )
@@ -21,9 +21,16 @@ type Config struct{
 	Thread int
 	MaxAction int
 	LogerType string
-	LogerConfig netloger.SqlConfig
+	LogerConfig toolbox.MySqlConfig
 	EnableCookie bool
+	SmartCookie bool
 	EnableProxy bool
+	EnableDB bool
+	ChangeProxy bool
+	ChangeAgent bool
+	ProxyPoolSize int
+	ProxyServer string
+	ProxyType string
 	TimeOut time.Duration
 	ResetHttpclient bool
 	DBC DBConfig
@@ -35,7 +42,7 @@ type Config struct{
 
 func NewConfig() Config{
 	config:=Config{
-		LogerConfig:netloger.SqlConfig{},
+		LogerConfig:toolbox.MySqlConfig{},
 		DBC:DBConfig{},
 		ARC:ActionRecordConfig{},
 	}
@@ -67,10 +74,28 @@ func (this *Config) Init(configFile string) error{
 	if err != nil{
 		return errors.New("bad ini,spider->enable_cookie")
 	}
+	this.SmartCookie,err = s.Key("smart_cookie").Bool()
+	if err != nil{
+		return errors.New("bad ini,spider->smart_cookie")
+	}
 	this.EnableProxy,err = s.Key("enable_proxy").Bool()
 	if err != nil{
 		return errors.New("bad ini,spider->enable_proxy")
 	}
+	this.ChangeProxy,err = s.Key("change_proxy").Bool()
+	if err != nil{
+		return errors.New("bad ini,spider->change_proxy")
+	}
+	this.ProxyPoolSize,err = s.Key("proxypool_size").Int()
+	if err != nil{
+		return errors.New("bad ini,spider->proxypool_size")
+	}
+	this.ChangeAgent,err = s.Key("change_agent").Bool()
+	if err != nil{
+		return errors.New("bad ini,spider->change_agent")
+	}
+	this.ProxyServer = s.Key("proxyserver").String()
+	this.ProxyType = s.Key("proxytype").String()
 	timeout,err := s.Key("timeout").Int()
 	if err != nil{
 		return errors.New("bad ini,spider->timeout")
@@ -84,6 +109,10 @@ func (this *Config) Init(configFile string) error{
 	this.ResetHttpclient,err = s.Key("reset_httpclient").Bool()
 	if err != nil{
 		return errors.New("bad ini,spider->reset_httpclient")
+	}
+	this.EnableDB,err = s.Key("enable_db").Bool()
+	if err != nil{
+		return errors.New("bad ini,spider->enable_db")
 	}
 	this.ActionRecord,err = s.Key("action_record").Bool()
 	if err != nil{
@@ -149,8 +178,8 @@ func (this *Config) Init(configFile string) error{
 		if this.LogerConfig.Address == ""{
 			return errors.New("bad ini,logerdb->address")
 		}
-		this.LogerConfig.Database = s.Key("database").String()
-		if this.LogerConfig.Database == ""{
+		this.LogerConfig.DataBase = s.Key("database").String()
+		if this.LogerConfig.DataBase == ""{
 			return errors.New("bad ini,logerdb->database")
 		}
 		this.LogerConfig.Table = s.Key("table").String()
@@ -166,32 +195,33 @@ func (this *Config) Init(configFile string) error{
 			return errors.New("bad ini,logerdb->max_idle_conns")
 		}
 	}
-
-	s = ini.Section("db")
-	if s==nil{
-		return errors.New("bad ini,cant find db section")
-	}
-	this.DBC.User = s.Key("user").String()
-	this.DBC.PassWord = s.Key("passwd").String()
-	this.DBC.DB = s.Key("database").String()
-	if this.DBC.DB == ""{
-		return errors.New("bad ini,db->database")
-	}
-	this.DBC.Type = s.Key("type").String()
-	if this.DBC.Type == ""{
-		return errors.New("bad ini,db->type")
-	}
-	this.DBC.Address = s.Key("address").String()
-	if this.DBC.Address == ""{
-		return errors.New("bad ini,db->address")
-	}
-	this.DBC.MaxOpenConns,err= s.Key("max_open_conns").Int()
-	if err !=nil{
-		return errors.New("bad ini,db->max_open_conns")
-	}
-	this.DBC.MaxIdleConns,err= s.Key("max_idle_conns").Int()
-	if err !=nil{
-		return errors.New("bad ini,db->max_idle_conns")
+	if this.EnableDB{
+		s = ini.Section("db")
+		if s==nil{
+			return errors.New("bad ini,cant find db section")
+		}
+		this.DBC.User = s.Key("user").String()
+		this.DBC.PassWord = s.Key("passwd").String()
+		this.DBC.DB = s.Key("database").String()
+		if this.DBC.DB == ""{
+			return errors.New("bad ini,db->database")
+		}
+		this.DBC.Type = s.Key("type").String()
+		if this.DBC.Type == ""{
+			return errors.New("bad ini,db->type")
+		}
+		this.DBC.Address = s.Key("address").String()
+		if this.DBC.Address == ""{
+			return errors.New("bad ini,db->address")
+		}
+		this.DBC.MaxOpenConns,err= s.Key("max_open_conns").Int()
+		if err !=nil{
+			return errors.New("bad ini,db->max_open_conns")
+		}
+		this.DBC.MaxIdleConns,err= s.Key("max_idle_conns").Int()
+		if err !=nil{
+			return errors.New("bad ini,db->max_idle_conns")
+		}
 	}
 	return nil
 }

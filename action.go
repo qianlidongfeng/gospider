@@ -1,6 +1,11 @@
 package gospider
 
-type Parser func (spider *Spider,html string,meta Meta) error
+import (
+	"github.com/qianlidongfeng/httpclient"
+	"net/http"
+)
+
+type Parser func (spider *Spider,resp httpclient.Resp,meta Meta) error
 
 type Action struct{
 	Parser string
@@ -8,28 +13,51 @@ type Action struct{
 	Meta Meta
 	Method string
 	PostData string
+	TempHeader map[string]string
+	Cookies []*http.Cookie
 	failCount int
-	respy int
+	Respy int
 }
 
-func NewAction(parser string,url string) Action{
+func NewAction() Action{
 	return Action{
-		Parser:parser,
-		Url:url,
 		Meta:NewMeta(),
 		Method:"GET",
 		PostData:"",
+		TempHeader:make(map[string]string),
 	}
 }
 
 func (this *Action) Clone() Action{
-	return Action{
+	a:= Action{
 		Parser:this.Parser,
 		Url:this.Url,
 		Meta:this.Meta.Clone(),
 		Method:this.Method,
 		PostData:this.PostData,
 	}
+	a.TempHeader=make(map[string]string)
+	for k,v:=range this.TempHeader{
+		a.TempHeader[k]=v
+	}
+	a.SetCookies(this.Cookies)
+	return a
+}
+
+func (this *Action) UnsafeClone() Action{
+	a:= Action{
+		Parser:this.Parser,
+		Url:this.Url,
+		Meta:this.Meta.UnsafeClone(),
+		Method:this.Method,
+		PostData:this.PostData,
+	}
+	a.TempHeader=make(map[string]string)
+	for k,v:=range this.TempHeader{
+		a.TempHeader[k]=v
+	}
+	a.SetCookies(this.Cookies)
+	return a
 }
 
 func (this *Action) SetParser(parser string){
@@ -50,4 +78,21 @@ func (this *Action) SetMethod(method string){
 
 func (this *Action) SetPostData(postdata string){
 	this.PostData=postdata
+}
+
+func (this *Action) SetTempHeaderField(key string,value string){
+	this.TempHeader[key]=value
+}
+
+func (this *Action) SetCookiesByString(domain string,path string,cookie string) error{
+	var err error
+	this.Cookies,err=httpclient.MakeCookies(domain,path,cookie)
+	if err != nil{
+		return err
+	}
+	return nil
+}
+
+func (this *Action) SetCookies(cookies []*http.Cookie){
+	this.Cookies=cookies
 }

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 )
-var TABLE_FIELDS = [8]string{"time","label","url","meta","respy","parser","method","postdata"}
+var TABLE_FIELDS = [5]string{"time","label","url","action","respy"}
 type ActionRecorder struct{
 	db *sql.DB
 	stmtPut *sql.Stmt
@@ -53,7 +53,7 @@ func (this *ActionRecorder) Init(cfg ActionRecordConfig) error{
 	if err != nil{
 		return err
 	}
-	this.stmtGet,err=this.db.Prepare(fmt.Sprintf(`SELECT id,url,meta,parser,method,postdata,respy FROM %s WHERE label="%s" AND respy<=%d`,cfg.Table,this.label,cfg.MaxRespy))
+	this.stmtGet,err=this.db.Prepare(fmt.Sprintf(`SELECT id,action FROM %s WHERE label="%s" AND respy<=%d`,cfg.Table,this.label,cfg.MaxRespy))
 	if err != nil{
 		return err
 	}
@@ -88,28 +88,18 @@ func (this *ActionRecorder) checkFeilds(db *sql.DB,tb string) error{
 	}
 	for _,v:= range fields{
 		switch v {
-		case "method":
-			_,err:=db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s VARCHAR(16)",tb,v))
-			if err != nil{
-				return err
-			}
-		case "label","parser":
+		case "label":
 			_,err:=db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s VARCHAR(64)",tb,v))
 			if err != nil{
 				return err
 			}
-		case "meta":
+		case "action":
 			_,err:=db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s BLOB",tb,v))
 			if err != nil{
 				return err
 			}
 		case "url":
 			_,err:=db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s VARCHAR(255)",tb,v))
-			if err != nil{
-				return err
-			}
-		case "postdata":
-			_,err:=db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s TEXT",tb,v))
 			if err != nil{
 				return err
 			}
@@ -129,14 +119,12 @@ func (this *ActionRecorder) checkFeilds(db *sql.DB,tb string) error{
 }
 
 func (this *ActionRecorder) Put(action Action) error{
-	//time,label,url,content,failed,func,method,postdata
-	//time.Now().Format("2006-01-02 15:04:05")
+	action.failCount=0
 	var binary bytes.Buffer
 	encoder := gob.NewEncoder(&binary)
-	err:=encoder.Encode(action.Meta)
+	err:=encoder.Encode(action)
 	b:=binary.Bytes()
-	_,err=this.stmtPut.Exec(time.Now().Format("2006-01-02 15:04:05"),this.label,action.Url,b,
-		action.respy,action.Parser,action.Method,action.PostData)
+	_,err=this.stmtPut.Exec(time.Now().Format("2006-01-02 15:04:05"),this.label,action.Url,b, action.Respy)
 	if err != nil{
 		return err
 	}
@@ -155,30 +143,29 @@ func (this *ActionRecorder) GetActions() (actions []Action,err error){
 	defer rows.Close()
 	var ids[]int
 	for rows.Next(){
-		var id,respy int
-		var url,parser,method,postdata string
+		var id int
 		var content []byte
 
-		err=rows.Scan(&id, &url, &content,&parser,&method,&postdata,&respy)
+		err=rows.Scan(&id, &content)
 		if err!=nil{
 			return
 		}
-		var meta Meta
+		var actiontemp Action
 		decoder := gob.NewDecoder(bytes.NewBuffer(content))
-		err=decoder.Decode(&meta)
+		err=decoder.Decode(&actiontemp)
 		if err!=nil{
 			return
 		}
-		action:=NewAction(parser,url)
-		action.Meta=meta
-		action.Method=method
-		action.PostData=postdata
-		action.respy=respy
+		action:= actiontemp.UnsafeClone()
+		action.Respy=actiontemp.Respy
 		actions=append(actions,action)
 		ids=append(ids,id)
 	}
 	for _,id:=range ids{
-		this.stmtDel.Exec(id)
+		_,err:=this.stmtDel.Exec(id)
+		if err != nil{
+			log.Fatal(err)
+		}
 	}
 	return
 }
