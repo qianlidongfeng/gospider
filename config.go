@@ -26,13 +26,13 @@ type Config struct{
 	SmartCookie bool
 	EnableProxy bool
 	EnableDB bool
+	EnableRedirect bool
 	ChangeProxy bool
+	RecoverProxy bool
 	ChangeAgent bool
 	ProxyPoolSize int
 	ProxyServer string
-	ProxyType string
 	TimeOut time.Duration
-	ReqClose bool
 	ResetHttpclient bool
 	DBC DBConfig
 	ARC ActionRecordConfig
@@ -79,6 +79,10 @@ func (this *Config) Init(configFile string) error{
 	if err != nil{
 		return errors.New("bad ini,spider->smart_cookie")
 	}
+	this.EnableRedirect,err = s.Key("enable_redirect").Bool()
+	if err != nil{
+		return errors.New("bad ini,spider->enable_redirect")
+	}
 	this.EnableProxy,err = s.Key("enable_proxy").Bool()
 	if err != nil{
 		return errors.New("bad ini,spider->enable_proxy")
@@ -86,6 +90,10 @@ func (this *Config) Init(configFile string) error{
 	this.ChangeProxy,err = s.Key("change_proxy").Bool()
 	if err != nil{
 		return errors.New("bad ini,spider->change_proxy")
+	}
+	this.RecoverProxy,err = s.Key("recover_proxy").Bool()
+	if err != nil{
+		return errors.New("bad ini,spider->recover_proxy")
 	}
 	this.ProxyPoolSize,err = s.Key("proxypool_size").Int()
 	if err != nil{
@@ -96,16 +104,11 @@ func (this *Config) Init(configFile string) error{
 		return errors.New("bad ini,spider->change_agent")
 	}
 	this.ProxyServer = s.Key("proxyserver").String()
-	this.ProxyType = s.Key("proxytype").String()
 	timeout,err := s.Key("timeout").Int()
 	if err != nil{
 		return errors.New("bad ini,spider->timeout")
 	}
 	this.TimeOut=time.Duration(timeout)*time.Millisecond
-	this.ReqClose,err= s.Key("reqclose").Bool()
-	if err != nil{
-		return errors.New("bad ini,spider->reqclose")
-	}
 	delay,err := s.Key("delay").Int()
 	if err != nil{
 		return errors.New("bad ini,spider->delay")

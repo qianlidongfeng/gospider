@@ -23,7 +23,7 @@ type savehandle func(meta Meta,db *sql.DB) error
 
 type Spider struct{
 	actionPool chan Action
-	clients []httpclient.HttpClient
+	clients []httpclient.Client
 	termsignal bool
 	finish bool
 	cfg Config
@@ -135,6 +135,7 @@ func (this *Spider)Init() error{
 }
 
 func (this *Spider) Run(){
+	this.finish=false
  	for i:=0;i<len(this.clients);i++{
  		this.threadWg.Add(1)
  		go func(i int){
@@ -147,11 +148,6 @@ func (this *Spider) Run(){
 	this.wg.Wait()
  	this.finish=true
  	this.threadWg.Wait()
- 	if this.termsignal{
-		<-this.gracefulQuitComplete
-		os.Exit(1)
-	}
-	runtime.GC()
 }
 
 func (this *Spider) Fix(){
@@ -178,8 +174,13 @@ func (this *Spider) Start(){
 
 func (this *Spider) Do(i int){
 	var action Action
-	action=<-this.actionPool
-	defer this.wg.Done()
+	select{
+	case action=<-this.actionPool:
+		this.wg.Done()
+		break
+	default:
+		return
+	}
 	if this.cfg.Delay != 0{
 		time.Sleep(this.cfg.Delay)
 	}
@@ -209,20 +210,23 @@ func (this *Spider) Do(i int){
 			if err != nil{
 				log.Warn(err)
 			}
-		}else{
+		}else if action.failCount<this.cfg.ARC.MaxFail{
 			this.AddAction(action)
 		}
-		if this.cfg.EnableProxy&&this.cfg.ChangeProxy{
-			if this.cfg.ProxyType=="http"{
-				this.clients[i].SetHttpProxy("http://"+this.proxyPool.Get())
-			}else if this.cfg.ProxyType=="sock5"{
-				this.clients[i].SetSock5Proxy(this.proxyPool.Get())
-			}
+		if this.cfg.ResetHttpclient{
+			this.clients[i]=this.NewClient()
+		}else if this.cfg.EnableProxy{
+			this.clients[i].SetProxy(this.proxyPool.Get())
 		}
-		log.Warn(err)
+		if this.cfg.Debug{
+			fmt.Println("failed:",action.failCount)
+			log.Warn(err)
+		}
 		return
 	}
-	log.Msg("success",action.Url)
+	if this.cfg.Debug {
+		log.Msg("success", action.Url)
+	}
 	err = this.parsers[action.Parser](this,resp,action.Meta)
 	if err != nil {
 		log.Warn(err)
@@ -238,21 +242,21 @@ func (this *Spider) Do(i int){
 		}else{
 			this.AddAction(action)
 		}
-		if this.cfg.EnableProxy&&this.cfg.ChangeProxy{
-			if this.cfg.ProxyType=="http"{
-				this.clients[i].SetHttpProxy("http://"+this.proxyPool.Get())
-			}else if this.cfg.ProxyType=="sock5"{
-				this.clients[i].SetSock5Proxy(this.proxyPool.Get())
-			}
+		if this.cfg.ResetHttpclient{
+			this.clients[i]=this.NewClient()
+		}else if this.cfg.EnableProxy{
+			this.clients[i].SetProxy(this.proxyPool.Get())
 		}
 		return
 	}
 	if this.cfg.EnableProxy&&this.cfg.ChangeProxy{
-		if this.cfg.ProxyType=="http"{
-			this.clients[i].SetHttpProxy("http://"+this.proxyPool.Get())
-		}else if this.cfg.ProxyType=="sock5"{
-			this.clients[i].SetSock5Proxy(this.proxyPool.Get())
+		if this.cfg.RecoverProxy{
+			proxy:=this.clients[i].GetProxy()
+			if proxy != ""{
+				this.proxyPool.Put(proxy)
+			}
 		}
+		this.clients[i].SetProxy(this.proxyPool.Get())
 	}
 	if this.cfg.ChangeAgent{
 		this.clients[i].SetHeaderField("User-Agent", httpclient.UserAgents.One())
@@ -296,7 +300,7 @@ func (this *Spider) GracefulQuit(){
 	<-c
 	this.termsignal=true
 	this.threadWg.Wait()
-	record:
+record:
 	for{
 		select{
 		case action:=<-this.actionPool:
@@ -311,7 +315,7 @@ func (this *Spider) GracefulQuit(){
 			break record
 		}
 	}
-	this.gracefulQuitComplete<-struct{}{}
+	os.Exit(1)
 }
 
 func (this *Spider) SetActionLabel(label string){
@@ -325,8 +329,8 @@ func (this *Spider) Save(meta Meta){
 	}
 }
 
-func (this *Spider) NewClient() httpclient.HttpClient{
-	client:=httpclient.NewHttpClient()
+func (this *Spider) NewClient() httpclient.Client{
+	client:=httpclient.NewClient()
 	if this.cfg.TimeOut != 0{
 		client.SetTimeOut(this.cfg.TimeOut)
 	}
@@ -334,13 +338,11 @@ func (this *Spider) NewClient() httpclient.HttpClient{
 		client.EnableCookie()
 	}
 	if this.cfg.EnableProxy{
-		if this.cfg.ProxyType=="http"{
-			client.SetHttpProxy("http://"+this.proxyPool.Get())
-		}else if this.cfg.ProxyType=="sock5"{
-			client.SetSock5Proxy(this.proxyPool.Get())
-		}
+		client.SetProxy(this.proxyPool.Get())
 	}
-	client.SetReqClose(this.cfg.ReqClose)
+	if !this.cfg.EnableRedirect{
+		client.DisableRedirect()
+	}
 	return client
 }
 

@@ -12,7 +12,7 @@ type Action struct{
 	Url string
 	Meta Meta
 	Method string
-	PostData string
+	PostData []byte
 	TempHeader map[string]string
 	Cookies []*http.Cookie
 	failCount int
@@ -23,7 +23,7 @@ func NewAction() Action{
 	return Action{
 		Meta:NewMeta(),
 		Method:"GET",
-		PostData:"",
+		PostData:nil,
 		TempHeader:make(map[string]string),
 	}
 }
@@ -76,7 +76,7 @@ func (this *Action) SetMethod(method string){
 	this.Method=method
 }
 
-func (this *Action) SetPostData(postdata string){
+func (this *Action) SetPostData(postdata []byte){
 	this.PostData=postdata
 }
 

@@ -35,6 +35,10 @@ func (this *ProxyPool) Get() string{
 	}
 }
 
+func (this *ProxyPool) Put(proxy string){
+	this.Pool<-proxy
+}
+
 func (this *ProxyPool) updateProxy(){
 	this.mu.Lock()
 	defer this.mu.Unlock()
@@ -42,7 +46,7 @@ func (this *ProxyPool) updateProxy(){
 		return
 	}
 	for{
-		client:=httpclient.NewHttpClient()
+		client:=httpclient.NewClient()
 		Resp,err:=client.Get(this.ProxyServer)
 		if err != nil{
 			log.Warn(err)
